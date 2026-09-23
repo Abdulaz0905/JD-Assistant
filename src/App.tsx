@@ -4,6 +4,7 @@ import { SnapshotBar } from './components/SnapshotBar';
 import { JDViewer } from './components/JDViewer';
 import { QAPanel } from './components/QAPanel';
 import { InterviewPrepPanel } from './components/InterviewPrepPanel';
+import { ResumeWeakSpotsPanel } from './components/ResumeWeakSpotsPanel';
 import { PracticeModal } from './components/PracticeModal';
 import { SAMPLE_JDS } from './data/sampleJDs';
 import {
@@ -11,9 +12,10 @@ import {
   QAMessage,
   InterviewPrepData,
   InterviewQuestion,
+  ResumeGapAnalysis,
 } from './types';
 import { getStats } from './utils/textUtils';
-import { HelpCircle, Target } from 'lucide-react';
+import { HelpCircle, Target, FileText } from 'lucide-react';
 
 export default function App() {
   // Theme state
@@ -45,8 +47,8 @@ export default function App() {
   const [jdText, setJdText] = useState<string>('');
   const [isEditorOpen, setIsEditorOpen] = useState<boolean>(true);
 
-  // Active right column tab: 'qa' | 'prep'
-  const [activeTab, setActiveTab] = useState<'qa' | 'prep'>('qa');
+  // Active right column tab: 'qa' | 'prep' | 'resume'
+  const [activeTab, setActiveTab] = useState<'qa' | 'prep' | 'resume'>('qa');
 
   // Grounding state
   const [activeLineNumber, setActiveLineNumber] = useState<number | null>(null);
@@ -61,6 +63,11 @@ export default function App() {
   const [prepData, setPrepData] = useState<InterviewPrepData | null>(null);
   const [isPrepLoading, setIsPrepLoading] = useState<boolean>(false);
   const [practicingQuestion, setPracticingQuestion] = useState<InterviewQuestion | null>(null);
+
+  // Optional Stretch: Resume Weak Spots state
+  const [resumeText, setResumeText] = useState<string>('');
+  const [gapAnalysis, setGapAnalysis] = useState<ResumeGapAnalysis | null>(null);
+  const [isAnalyzingGaps, setIsAnalyzingGaps] = useState<boolean>(false);
 
   // Main runner when a new JD is loaded
   const runFullAnalysis = useCallback(async (text: string) => {
@@ -110,12 +117,36 @@ export default function App() {
     await Promise.allSettled([analyzePromise, prepPromise]);
   }, []);
 
+  // Run Gap Analysis
+  const runGapAnalysis = async () => {
+    if (!jdText.trim() || !resumeText.trim() || isAnalyzingGaps) return;
+    setIsAnalyzingGaps(true);
+
+    try {
+      const res = await fetch('/api/resume-gaps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jdText, resumeText }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setGapAnalysis(data);
+      }
+    } catch (err) {
+      console.error('Error analyzing resume gaps:', err);
+    } finally {
+      setIsAnalyzingGaps(false);
+    }
+  };
+
   // Update JD text handler
   const handleUpdateJDText = (newText: string) => {
     setJdText(newText);
     setIsEditorOpen(false);
     setActiveLineNumber(null);
     setQaMessages([]);
+    setGapAnalysis(null);
     runFullAnalysis(newText);
   };
 
@@ -131,6 +162,8 @@ export default function App() {
     setSnapshot(null);
     setPrepData(null);
     setQaMessages([]);
+    setResumeText('');
+    setGapAnalysis(null);
     setActiveLineNumber(null);
     setIsEditorOpen(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -140,10 +173,21 @@ export default function App() {
   const handleLoadSampleJD = () => {
     const sample = SAMPLE_JDS[0];
     setJdText(sample.jdText);
+    if (sample.sampleResume) {
+      setResumeText(sample.sampleResume);
+    }
     setIsEditorOpen(false);
     setActiveLineNumber(null);
     setQaMessages([]);
+    setGapAnalysis(null);
     runFullAnalysis(sample.jdText);
+  };
+
+  const handleLoadSampleResume = () => {
+    const sample = SAMPLE_JDS[0];
+    if (sample?.sampleResume) {
+      setResumeText(sample.sampleResume);
+    }
   };
 
   // Ask question handler
@@ -158,6 +202,19 @@ export default function App() {
     };
 
     setQaMessages((prev) => [...prev, userMessage]);
+
+    if (!jdText.trim()) {
+      const guidanceMessage: QAMessage = {
+        id: `guidance-${Date.now()}`,
+        role: 'assistant',
+        content: 'Please paste or load a job description on the left first. I need the text of the posting to verify facts and cite exact lines.',
+        status: 'not_stated',
+        timestamp: Date.now(),
+      };
+      setQaMessages((prev) => [...prev, guidanceMessage]);
+      return;
+    }
+
     setIsQaLoading(true);
 
     try {
@@ -175,7 +232,8 @@ export default function App() {
       });
 
       if (!res.ok) {
-        throw new Error('Failed to get answer.');
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Server returned ${res.status}`);
       }
 
       const data = await res.json();
@@ -201,7 +259,7 @@ export default function App() {
       const errorMessage: QAMessage = {
         id: `err-${Date.now()}`,
         role: 'assistant',
-        content: 'An error occurred while answering your question. Please try again.',
+        content: err?.message || 'An error occurred while answering your question. Please try again.',
         status: 'not_stated',
         timestamp: Date.now(),
       };
@@ -304,6 +362,30 @@ export default function App() {
                   </span>
                 )}
               </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('resume')}
+                className={`flex-1 py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  activeTab === 'resume'
+                    ? 'bg-black text-white dark:bg-white dark:text-black shadow-xs'
+                    : 'text-neutral-600 dark:text-neutral-400 hover:text-black dark:hover:text-white hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>3. Weak Spots (Stretch)</span>
+                {gapAnalysis && (
+                  <span
+                    className={`px-1.5 py-0.2 rounded-md font-mono tabular-nums text-[10px] ${
+                      activeTab === 'resume'
+                        ? 'bg-neutral-800 text-white dark:bg-neutral-200 dark:text-black'
+                        : 'bg-neutral-200 dark:bg-neutral-800 text-neutral-800 dark:text-neutral-200'
+                    }`}
+                  >
+                    {gapAnalysis.weakSpots.length}
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Tab Content Panels */}
@@ -328,6 +410,19 @@ export default function App() {
                   onRefresh={() => runFullAnalysis(jdText)}
                   onJumpToLine={handleJumpToLine}
                   onPracticeQuestion={(q) => setPracticingQuestion(q)}
+                />
+              )}
+
+              {activeTab === 'resume' && (
+                <ResumeWeakSpotsPanel
+                  resumeText={resumeText}
+                  onUpdateResumeText={setResumeText}
+                  gapAnalysis={gapAnalysis}
+                  isLoading={isAnalyzingGaps}
+                  onRunAnalysis={runGapAnalysis}
+                  onJumpToLine={handleJumpToLine}
+                  hasJob={hasJob}
+                  onLoadSampleResume={handleLoadSampleResume}
                 />
               )}
             </div>

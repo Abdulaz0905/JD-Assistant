@@ -17,20 +17,14 @@ const isProduction = process.env.NODE_ENV === 'production';
 app.use(express.json({ limit: '10mb' }));
 
 // Shared Gemini client according to the gemini-api skill instructions
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+const apiKey = process.env.GEMINI_API_KEY;
+const ai = new GoogleGenAI(apiKey ? { apiKey } : {});
 
-const MODEL_NAME = 'gemini-flash-latest';
+const MODEL_NAME = 'gemini-2.5-flash';
 
 // Robust Gemini invoker with exponential backoff and fallback model handling for transient 503/429 spikes
 async function generateContentWithRetry(options: any): Promise<any> {
-  const modelsToTry = [MODEL_NAME, 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
+  const modelsToTry = [MODEL_NAME, 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.1-flash-lite'];
   let lastError: any = null;
 
   for (const model of modelsToTry) {
@@ -48,7 +42,8 @@ async function generateContentWithRetry(options: any): Promise<any> {
           msg.includes('503') ||
           msg.includes('429') ||
           msg.includes('UNAVAILABLE') ||
-          msg.includes('high demand');
+          msg.includes('high demand') ||
+          msg.includes('Resource has been exhausted');
 
         if (isTransient && attempt < 2) {
           await new Promise((resolve) => setTimeout(resolve, 800 * (attempt + 1)));
@@ -227,12 +222,15 @@ Respond with strict JSON matching the schema.`;
   }
 });
 
-// 2. Grounded Q&A Endpoint
-app.post('/api/qa', async (req, res) => {
+// 2. Grounded Q&A Endpoint (supports /api/grounded-qa and /api/qa)
+app.post(['/api/grounded-qa', '/api/qa'], async (req, res) => {
   try {
     const { jdText, question, conversationHistory } = req.body;
-    if (!jdText || !question) {
-      return res.status(400).json({ error: 'Both jdText and question are required.' });
+    if (!jdText || typeof jdText !== 'string' || jdText.trim().length === 0) {
+      return res.status(400).json({ error: 'Job description text is empty. Please paste or load a job description on the left first.' });
+    }
+    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+      return res.status(400).json({ error: 'Question is required.' });
     }
 
     const { numberedText } = formatNumberedLines(jdText);
@@ -240,7 +238,7 @@ app.post('/api/qa', async (req, res) => {
     const historyContext = Array.isArray(conversationHistory) && conversationHistory.length > 0
       ? `PREVIOUS CONVERSATION CONTEXT:\n${conversationHistory
           .slice(-4)
-          .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text}`)
+          .map((m: any) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content || m.text || ''}`)
           .join('\n')}\n\n`
       : '';
 
