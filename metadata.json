@@ -1,0 +1,8 @@
+{
+  "name": "JD Assistant — Grounded Q&A + Interview Prep",
+  "description": "Parse job descriptions to get trustworthy, line-cited Q&A answers with strict 'not stated' grounding, targeted interview prep questions tied directly to the JD, and resume weak-spot analysis.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
